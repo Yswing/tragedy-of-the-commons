@@ -13,7 +13,7 @@ class Game:
 
     def play(self, players):
         assert(len(set([p.index for p in players])) == len(players))
-        assert all(["H" != p.index for p in players])
+        assert all([type(p.index) is int and p.index > 0 for p in players])
         for i in xrange(self.max_nturns):
             if self.game_is_over():
                 self.end_game(players)
@@ -50,7 +50,7 @@ class Game:
         return self.board.tiles.sum() == 0
 
     def end_game(self, players):
-        if self.game_is_win():
+        if self.game_is_win(players):
             pi = self.winning_player(players).index
             print "Game won by Player {0}.".format(pi)
         else:
@@ -59,7 +59,7 @@ class Game:
     def game_is_win(self, players):
         return sum([p.vps for p in players]) >= self.vps_to_win
 
-    def winning_player(self):
+    def winning_player(self, players):
         return players[np.argmax([p.vps for p in players])]
 
 class Board:
@@ -73,8 +73,7 @@ class Board:
         self.obj_cost = obj_cost
         self.tiles = self.init_tiles(self.nrows, self.ncols, self.ntrees_init)
         self.grid = self.init_grid(self.tiles)
-        self.obj_add = {"hut": "H", "station": "S{0}"}
-        assert set(self.obj_names.keys()) == set(self.obj_cost.keys())
+        self.obj_add = {"hut": -1}
 
     def get_tree_ind(self, tiles, n=1):
         row = np.random.randint(low=0, high=tiles.shape[0], size=(n,))
@@ -117,15 +116,18 @@ class Board:
         is_success = all([nm in self.obj_cost for nm,pos in objs])
         for nm, (i,j) in objs:
             is_success = is_success and (self.grid[i,j] == 0)
-            self.grid[i,j] = self.obj_names[nm].format(player_index) # e.g. "S1", "S2", ...
+            if nm in self.obj_add:
+                self.grid[i,j] = self.obj_add[nm]
+            else:
+                self.grid[i,j] = player_index # e.g. 1,2,...
         return is_success
 
     def valid_object_inds(self):
         inds = [(i,j) for i in xrange(self.grid.shape[0]) for j in xrange(self.grid.shape[1])]
-        return [(i,j) for (i,j) in inds if self.grid[i,j] > 0]
+        return [(i,j) for (i,j) in inds if self.grid[i,j] == 0]
 
     def valid_curse_inds(self):
-        return [(r,c, self.tiles[r,c]) for r in xrange(self.tiles.shape[0]) for c in xrange(self.tiles.shape[1]) if tiles[r,c] > 0]
+        return [(r,c, self.tiles[r,c]) for r in xrange(self.tiles.shape[0]) for c in xrange(self.tiles.shape[1]) if self.tiles[r,c] > 0]
 
     def add_random_garden(self):
         ind = self.get_tree_ind(self.tiles, n=1)
@@ -139,15 +141,17 @@ class Board:
 
     def curse_tile(self, (r, c), n):
         assert n >= 1
-        assert tiles[r,c] >= n
+        assert self.tiles[r,c] >= n
         self.tiles[r,c] -= n
 
         # check for VPs
         cs = {} # counts of adjacent objects, per player
         inds = self.grids_touching_tile(r,c)
         for ro,co in inds:
-            if "S" in self.grid[ro,co]:
-                pind = self.grid[ro,co].split("S")[1]
+            if self.grid[ro,co] > 0:
+                pind = int(self.grid[ro,co])
+                if pind not in cs:
+                    cs[pind] = 0
                 cs[pind] += 1
 
         # 2nd val notifies if we need to add a curse
@@ -158,13 +162,13 @@ class Deck:
         """
         cards = [(name, count), ...]
         """
-        self.card_names = [nm for nm,n in card_info]
+        self.card_names = card_info.keys()
         self.deck = self.init_deck(card_info)
         self.discard = []
 
     def init_deck(self, card_info):
         deck = []
-        for (name, count) in card_info:
+        for (name, count) in card_info.iteritems():
             deck.extend([name]*count)
         np.random.shuffle(deck)
         return deck
@@ -172,8 +176,8 @@ class Deck:
     def draw(self):
         if len(self.deck) == 0:
             self.shuffle()
-        card = deck.pop()
-        discard.append(card)
+        card = self.deck.pop()
+        self.discard.append(card)
         return card
 
     def shuffle(self):
@@ -184,7 +188,7 @@ class Deck:
 
 def play_game():
     board = Board((6,6), {"hut": 2, "station": 3})
-    Deck = Deck(["garden", 5, "curse", 3])
+    deck = Deck({"garden": 5, "curse": 3})
     g = Game(board, deck)
     ps = [DefaultPlayer(1), DefaultPlayer(2)]
     g.play(ps)
