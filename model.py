@@ -1,6 +1,47 @@
 import numpy as np
 from player import DefaultPlayer
 
+class Players:
+    def __init__(self, players):
+        self.players = players
+        self.init()
+
+    def init(self):
+        self.vps = dict((p.index, 0) for p in self.players)
+        self.money = dict((p.index, 0) for p in self.players)
+
+    def get_money(self, player_index):
+        return self.money[player_index]
+
+    def get_vps(self, player_index):
+        return self.vps[player_index]
+
+    def update_money(self, player_index, delta):
+        assert delta != 0
+        if delta < 0:
+            assert self.money[player_index] >= abs(delta)
+        self.money[player_index] += delta
+
+    def update_vps(self, player_index, delta):
+        assert delta > 0
+        self.vps[player_index] += delta
+
+    def player_with_most_vps(self):
+        vmax = -1
+        imax = -1
+        for i,v in self.vps.iteritems():
+            if v > vmax:
+                vmax = v
+                imax = i
+        # return None if tie
+        if len([v for i,v in self.vps.iteritems() if v == self.vps[imax]]) > 1:
+            return None
+        return [p for p in self.players if p.index == imax][0]
+
+    def validate(self):
+        assert(len(set([p.index for p in self.players])) == len(self.players))
+        assert all([type(p.index) is int and p.index > 0 for p in self.players])
+
 class Game:
     def __init__(self, board, deck, max_nturns=200, vps_to_win=11):
         self.board = board
@@ -12,17 +53,22 @@ class Game:
         assert set(self.deck.card_names) == set(self.valid_cards)
 
     def play(self, players):
-        assert(len(set([p.index for p in players])) == len(players))
-        assert all([type(p.index) is int and p.index > 0 for p in players])
+        Ps = Players(players)
         for i in xrange(self.max_nturns):
             if self.game_is_over():
-                self.end_game(players)
+                self.end_game(Ps, i)
                 return
-            p = players[i % len(players)]
-            self.next_turn(p, players)
+            p = players[i % len(Ps.players)]
+            self.next_turn(p, Ps)
+        print "Warning: Game ended due to max iterations."
+        self.end_game(Ps, i)
 
-    def next_turn(self, p, players):
-        act_name, acts = p.take_action(self.board)
+    def reset(self):
+        self.deck.init_deck()
+        self.board.init_board()
+
+    def next_turn(self, p, Ps):
+        act_name, acts = p.take_action(self.board, Ps.get_money(p.index))
         assert act_name in self.valid_actions
         if act_name == "draw":
             card = self.deck.draw()
@@ -35,32 +81,30 @@ class Game:
                 if add_curse:
                     self.deck.discard.append("curse")
                 for pind in cs:
-                    pcs = [pc for pc in players if pc.index == pind]
-                    assert len(pcs) == 1
-                    pcs[0].vps += cs[pind]
-                p.money += int(n > 1) + n
+                    Ps.update_vps(pind, cs[pind])
+                Ps.update_money(p.index, int(n>1) + n)
         elif act_name == "buy":
             is_success = self.board.add_objects(acts, p.index)
             cost = sum([self.board.obj_cost[nm] for nm,pos in acts])
-            assert p.money >= cost
-            p.money -= cost
+            Ps.update_money(p.index, -cost)
             assert is_success
 
     def game_is_over(self):
         return self.board.tiles.sum() == 0
 
-    def end_game(self, players):
-        if self.game_is_win(players):
-            pi = self.winning_player(players).index
-            print "Game won by Player {0}.".format(pi)
+    def end_game(self, Ps, i):
+        print "Game ended after {0} turns.".format(i+1)
+        if self.game_is_win(Ps):
+            pi = Ps.player_with_most_vps()
+            if pi is None:
+                print "Game is a tie!"
+            else:
+                print "Game won by Player {0}.".format(pi.index)
         else:
             print "Game lost."
 
-    def game_is_win(self, players):
-        return sum([p.vps for p in players]) >= self.vps_to_win
-
-    def winning_player(self, players):
-        return players[np.argmax([p.vps for p in players])]
+    def game_is_win(self, Ps):
+        return sum(Ps.vps.values()) >= self.vps_to_win
 
 class Board:
     def __init__(self, (nrows, ncols), obj_cost, ntrees=15):
@@ -71,9 +115,12 @@ class Board:
         self.ncols = ncols
         self.ntrees_init = ntrees
         self.obj_cost = obj_cost
+        self.obj_add = {"hut": -1}
+        self.init_board()
+
+    def init_board(self):
         self.tiles = self.init_tiles(self.nrows, self.ncols, self.ntrees_init)
         self.grid = self.init_grid(self.tiles)
-        self.obj_add = {"hut": -1}
 
     def get_tree_ind(self, tiles, n=1):
         row = np.random.randint(low=0, high=tiles.shape[0], size=(n,))
@@ -114,7 +161,8 @@ class Board:
 
     def add_objects(self, objs, player_index):
         is_success = all([nm in self.obj_cost for nm,pos in objs])
-        for nm, (i,j) in objs:
+        for nm, pos in objs:
+            (i,j) = pos
             is_success = is_success and (self.grid[i,j] == 0)
             if nm in self.obj_add:
                 self.grid[i,j] = self.obj_add[nm]
@@ -162,16 +210,17 @@ class Deck:
         """
         cards = [(name, count), ...]
         """
-        self.card_names = card_info.keys()
-        self.deck = self.init_deck(card_info)
-        self.discard = []
+        self.card_info = card_info
+        self.card_names = self.card_info.keys()
+        self.init_deck()
 
-    def init_deck(self, card_info):
+    def init_deck(self):
         deck = []
-        for (name, count) in card_info.iteritems():
+        for (name, count) in self.card_info.iteritems():
             deck.extend([name]*count)
         np.random.shuffle(deck)
-        return deck
+        self.deck = deck
+        self.discard = []
 
     def draw(self):
         if len(self.deck) == 0:
@@ -186,12 +235,14 @@ class Deck:
         self.discard = []
         np.random.shuffle(self.deck)
 
-def play_game():
+def play_game(n=10):
     board = Board((6,6), {"hut": 2, "station": 3})
     deck = Deck({"garden": 5, "curse": 3})
     g = Game(board, deck)
     ps = [DefaultPlayer(1), DefaultPlayer(2)]
-    g.play(ps)
+    for i in xrange(n):
+        g.play(ps)
+        g.reset()
 
 if __name__ == '__main__':
     play_game()

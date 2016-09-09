@@ -8,9 +8,12 @@ class DefaultPlayer:
         self.index = index # should be int > 0
         self.purchases = []
 
-    def take_action(self, board):
-        if any([self.money >= v for v in board.obj_cost.values()]):
-            return "buy", self.buy_objects(board)
+    def take_action(self, board, cur_money):
+        if any([cur_money >= v for v in board.obj_cost.values()]):
+            acts = self.buy_objects(board, cur_money)
+            if not acts or acts[0][1] is None: # couldn't find empty pos
+                return "draw", self.choose_curse_tile(board)
+            return "buy", acts
         else:
             return "draw", self.choose_curse_tile(board)
 
@@ -89,18 +92,19 @@ class DefaultPlayer:
             assert False
         return name, pos
 
-    def buy_objects(self, board):
+    def buy_objects(self, board, cur_money):
         cost_of_hut = board.obj_cost["hut"]
         cost_of_log = board.obj_cost["station"]
         objs = [] # (nm,(i,j)), ...
-        cur_money = self.money
         while cur_money >= min(cost_of_hut, cost_of_log):
             name, pos = self.buy_object(board, cur_money, cost_of_hut, cost_of_log, objs)
             assert name in ["hut", "station"]
+            if pos is None:
+                return objs
+            objs.append((name, pos))
             if name == "hut":
                 cur_money -= cost_of_hut
             elif name == "station":
                 cur_money -= cost_of_log
             self.purchases.append((name, pos))
-            objs.append((name, pos))
         return objs
