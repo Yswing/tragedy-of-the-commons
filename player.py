@@ -2,10 +2,9 @@ import random
 import numpy as np
 
 class DefaultPlayer:
-    def __init__(self, index):
-        self.vps = 0 # should be read-only
-        self.money = 0 # should be read-only
+    def __init__(self, index, name=None):
         self.index = index # should be int > 0
+        self.name = name if name is not None else str(self.index)
         self.purchases = []
 
     def take_action(self, board, cur_money):
@@ -16,6 +15,9 @@ class DefaultPlayer:
             return "buy", acts
         else:
             return "draw", self.choose_curse_tile(board)
+
+    def choose_curse_amount(self, board, r, c):
+        return max(1, board.tiles[r,c]-1)        
 
     def choose_curse_tile(self, board):
         options = board.valid_curse_inds()
@@ -34,7 +36,7 @@ class DefaultPlayer:
                 r,c,nts = random.choice(top_opts)
             else:
                 r,c,nts = random.choice(options)
-        n = max(1, board.tiles[r,c]-1)
+        n = self.choose_curse_amount(board, r,c)
         return r,c,n
 
     def get_most_valuable_empty_inds(self, board, recent_acts):
@@ -71,25 +73,19 @@ class DefaultPlayer:
         return self.get_most_valuable_empty_inds(board, recent_acts)
 
     def buy_object(self, board, money, cost_of_hut, cost_of_log, recent_acts):
+        assert money >= min(cost_of_hut, cost_of_log)
         if money >= cost_of_log and money >= cost_of_hut:
-            if not self.purchases:
+            if not self.purchases: # buy a hut first
                 name = "hut"
             elif "hut" == self.purchases[-1][0]:
+                # if you bought a hut last, buy a station
                 name = "station"
             else:
                 name = "hut"
-        elif money >= cost_of_log:
-            name = "station"
-        elif money >= cost_of_hut:
-            name = "hut"
-        else:
-            assert False
-        if name == "hut":
-            pos = self.choose_hut_pos(board, recent_acts)
-        elif name == "station":
-            pos = self.choose_station_pos(board, recent_acts)
-        else:
-            assert False
+        else: # wait til you can choose
+            return "hut", None
+
+        pos = self.choose_station_pos(board, recent_acts)
         return name, pos
 
     def buy_objects(self, board, cur_money):
@@ -108,3 +104,62 @@ class DefaultPlayer:
                 cur_money -= cost_of_log
             self.purchases.append((name, pos))
         return objs
+
+class SelfishPlayer(DefaultPlayer):
+    def buy_object(self, board, money, cost_of_hut, cost_of_log, recent_acts):
+        assert money >= min(cost_of_hut, cost_of_log)
+        name = "station"
+        if money >= cost_of_log:
+            pos = self.choose_station_pos(board, recent_acts)
+        else:
+            # give up; wait another turn
+            pos = None
+        return name, pos
+
+class SuperSelfishPlayer(SelfishPlayer):
+    def choose_curse_amount(self, board, r, c):
+        if board.tiles[r,c] == 2:
+            # always choose the bonus
+            return 2
+        else:
+            return max(1, board.tiles[r,c]-1)
+
+class ReasonablePlayer(DefaultPlayer):
+    def choose_curse_amount(self, board, r, c):
+        if board.tiles[r,c] == 2:
+            # always choose the bonus
+            return 2
+        else:
+            return max(1, board.tiles[r,c]-1)
+
+class CautiousPlayer(DefaultPlayer):
+    def buy_object(self, board, money, cost_of_hut, cost_of_log, recent_acts):
+        assert money >= min(cost_of_hut, cost_of_log)
+        if money >= cost_of_log and money >= cost_of_hut:
+            if not self.purchases: # buy a hut first
+                name = "hut"
+            elif "hut" == self.purchases[-1][0]:
+                # if you bought a hut last, buy a station
+                name = "station"
+            else:
+                name = "hut"
+        elif money >= cost_of_log:
+            # if you can only buy a station, buy a station
+            name = "station"
+        elif money >= cost_of_hut:
+            # if you can only buy a hut, buy a hut
+            name = "hut"
+
+        pos = self.choose_station_pos(board, recent_acts)
+        return name, pos
+
+class GenerousPlayer(DefaultPlayer):
+    def buy_object(self, board, money, cost_of_hut, cost_of_log, recent_acts):
+        assert money >= min(cost_of_hut, cost_of_log)
+        name = "hut"
+        if money >= cost_of_hut:
+            pos = self.choose_station_pos(board, recent_acts)
+        else:
+            # give up; wait another turn
+            pos = None
+        return name, pos

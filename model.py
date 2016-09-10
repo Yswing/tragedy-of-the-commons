@@ -1,5 +1,5 @@
 import numpy as np
-from player import DefaultPlayer
+import collections
 
 class Players:
     def __init__(self, players):
@@ -9,6 +9,8 @@ class Players:
     def init(self):
         self.vps = dict((p.index, 0) for p in self.players)
         self.money = dict((p.index, 0) for p in self.players)
+        self.huts = dict((p.index, 0) for p in self.players)
+        self.stations = dict((p.index, 0) for p in self.players)
 
     def get_money(self, player_index):
         return self.money[player_index]
@@ -25,6 +27,19 @@ class Players:
     def update_vps(self, player_index, delta):
         assert delta > 0
         self.vps[player_index] += delta
+
+    def update_purchases(self, player_index, acts):
+        for nm, _ in acts:
+            if nm == "hut":
+                self.huts[player_index] += 1
+            elif nm == "station":
+                self.stations[player_index] += 1
+            else:
+                assert False
+
+    def player_status(self, player_index):
+        p = [p for p in self.players if p.index == player_index][0]
+        return "P({0}): ${1}, {2} VPs, {3} huts, {4} stations".format(p.name, self.money[p.index], self.vps[p.index], self.huts[p.index], self.stations[p.index])
 
     def player_with_most_vps(self):
         vmax = -1
@@ -43,25 +58,25 @@ class Players:
         assert all([type(p.index) is int and p.index > 0 for p in self.players])
 
 class Game:
-    def __init__(self, board, deck, max_nturns=200, vps_to_win=11):
+    def __init__(self, board, deck, max_nturns=200, vps_to_win=11, verbose=False):
         self.board = board
         self.deck = deck
         self.max_nturns = max_nturns
         self.vps_to_win = vps_to_win
         self.valid_actions = ["draw", "buy"]
         self.valid_cards = ["garden", "curse"]
+        self.verbose = verbose
         assert set(self.deck.card_names) == set(self.valid_cards)
 
-    def play(self, players):
+    def play(self, players, print_end_status=True):
         Ps = Players(players)
         for i in xrange(self.max_nturns):
             if self.game_is_over():
-                self.end_game(Ps, i)
-                return
+                return self.end_game(Ps, i, False, print_end_status)
             p = players[i % len(Ps.players)]
             self.next_turn(p, Ps)
         print "Warning: Game ended due to max iterations."
-        self.end_game(Ps, i)
+        return self.end_game(Ps, i, True, print_end_status)
 
     def reset(self):
         self.deck.init_deck()
@@ -70,6 +85,7 @@ class Game:
     def next_turn(self, p, Ps):
         act_name, acts = p.take_action(self.board, Ps.get_money(p.index))
         assert act_name in self.valid_actions
+        card = None
         if act_name == "draw":
             card = self.deck.draw()
             if card == "garden":
@@ -87,21 +103,44 @@ class Game:
             is_success = self.board.add_objects(acts, p.index)
             cost = sum([self.board.obj_cost[nm] for nm,pos in acts])
             Ps.update_money(p.index, -cost)
+            Ps.update_purchases(p.index, acts)
             assert is_success
+        if self.verbose:
+            print self.board.tiles
+            print "P({0}): {1} {2}".format(p.name, act_name, card if card is not None else str(acts))
+            print Ps.player_status(p.index)
 
     def game_is_over(self):
         return self.board.tiles.sum() == 0
 
-    def end_game(self, Ps, i):
-        print "Game ended after {0} turns.".format(i+1)
+    def end_game(self, Ps, i, max_iters_reached=False, print_end_status=True,):
+        if print_end_status:
+            print "Game ended after {0} turns, ".format(i+1),
+        score = '-'.join([str(v) for v in Ps.vps.values()])
+        winner = None
         if self.game_is_win(Ps):
+            status = "WIN"
             pi = Ps.player_with_most_vps()
             if pi is None:
-                print "Game is a tie!"
+                status = "TIE"
+                if print_end_status:
+                    print "Game TIED {0}!".format(score)
             else:
-                print "Game won by Player {0}.".format(pi.index)
+                if print_end_status:
+                    print "Game WON {1} by Player {0}.".format(pi.name, score)
+                winner = pi.name
         else:
-            print "Game lost."
+            status = "LOSS"
+            if print_end_status:
+                print "Game LOST {0}.".format(score)
+        if print_end_status:
+            for i,c in Ps.huts.iteritems():
+                print "    P{0}: {1} huts".format(i,c)
+            for i,c in Ps.stations.iteritems():
+                print "    P{0}: {1} stations".format(i,c)
+        if max_iters_reached:
+            status = "MAX_ITERS"
+        return status, winner
 
     def game_is_win(self, Ps):
         return sum(Ps.vps.values()) >= self.vps_to_win
@@ -177,15 +216,14 @@ class Board:
     def valid_curse_inds(self):
         return [(r,c, self.tiles[r,c]) for r in xrange(self.tiles.shape[0]) for c in xrange(self.tiles.shape[1]) if self.tiles[r,c] > 0]
 
-    def add_random_garden(self):
+    def add_random_garden(self, hut_multiplier=2):
         ind = self.get_tree_ind(self.tiles, n=1)
         r,c = ind[0]
         
         # check for hut nearby
         inds = self.grids_touching_tile(r,c)
         v = len([1 for ro,co in inds if self.grid[ro,co] == self.obj_add["hut"]])
-        
-        self.tiles[r,c] += (v+1)
+        self.tiles[r,c] += (hut_multiplier*v+1)
 
     def curse_tile(self, (r, c), n):
         assert n >= 1
@@ -234,15 +272,4 @@ class Deck:
         self.deck = [x for x in self.discard]
         self.discard = []
         np.random.shuffle(self.deck)
-
-def play_game(n=10):
-    board = Board((6,6), {"hut": 2, "station": 3})
-    deck = Deck({"garden": 5, "curse": 3})
-    g = Game(board, deck)
-    ps = [DefaultPlayer(1), DefaultPlayer(2)]
-    for i in xrange(n):
-        g.play(ps)
-        g.reset()
-
-if __name__ == '__main__':
-    play_game()
+        # print collections.Counter(self.deck)
