@@ -1,6 +1,8 @@
 
 # coding: utf-8
 
+# the script simulate the tragedy of the commons
+
 # In[7]:
 
 import random
